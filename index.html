@@ -1,22 +1,697 @@
-<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>掌上信箱</title><style>*{box-sizing:border-box}body{margin:auto;max-width:640px;padding:24px;background:#edf2ed;color:#17342d;font:16px/1.55 system-ui}header{display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #33594d}h1{font-size:27px}button,input,textarea{font:inherit;padding:10px;border:1px solid #8ba399;border-radius:8px}button{background:#215848;color:white;cursor:pointer}input{width:8em}article{background:white;border-radius:12px;padding:12px;margin:10px 0;white-space:pre-wrap;overflow-wrap:anywhere}article.mine{background:#d5eadd;margin-left:32px}small{display:block;color:#416255}img{max-width:100%;max-height:320px}textarea{width:100%;margin:12px 0}#log{height:50vh;overflow:auto}p{min-height:1em}:root{color-scheme:dark;--night:#101126;--ink:#f5f1e8;--mint:#81e4ce;--coral:#ff947d}html{min-height:100%;background:#101126}body{position:relative;background:transparent;color:var(--ink);padding:clamp(16px,4vw,32px);font-family:system-ui,sans-serif}#field{position:fixed;inset:0;width:100%;height:100%;z-index:-1}header{position:relative;overflow:hidden;background:#171831;border:1px solid #51536a;border-radius:18px;padding:16px 22px}header h1{letter-spacing:.12em;color:var(--mint)}#pair,main{background:#17182eef;padding:20px;border:1px solid #4c4d65;border-radius:16px;margin-top:18px}h2{font-size:20px}button{background:var(--mint);color:#13172a;font-weight:650;border:0;min-height:44px}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--coral)}input,textarea{background:#101126;color:var(--ink);border-color:#676a83}article{background:#292b4a;color:var(--ink);border-left:3px solid var(--mint)}article.mine{background:#342737;border-color:var(--coral)}small{color:#bfbdd4}#status{color:var(--mint)}#change{background:#34344c;color:var(--ink)}#file{width:100%;margin-top:6px}
-</style><canvas id="field" aria-hidden="true"></canvas><script>
-function field(){const c=document.querySelector('#field'),g=c.getContext('2d');c.width=innerWidth;c.height=innerHeight;g.fillStyle='#101126';g.fillRect(0,0,c.width,c.height);for(let i=0;i<90;i++){g.beginPath();g.strokeStyle=i%5===0?'#ff947d66':'#81e4ce35';for(let x=-8;x<c.width+8;x+=6){const y=c.height*(.13+i/108)+Math.sin(x/112+i*.096)*44+Math.cos(x/168-i*.043)*53; if(x===-8)g.moveTo(x,y);else g.lineTo(x,y)}g.stroke()}}field();addEventListener('resize',field);
-</script><header><h1>掌上信箱</h1><button id="change" hidden>更换配对</button></header><section id="pair"><h2>连接 ESP</h2><button id="create">创建四位码</button> <input id="pin" inputmode="numeric" maxlength="4" placeholder="四位配对码"> <button id="join">加入</button></section><p id="status" role="status"></p><main hidden><div id="log"></div><textarea placeholder="写消息" id="msg"></textarea><button id="send">发送文字</button> <label>发送图片 <input id="file" type="file" accept="image/*"></label></main><script>
-const el=id=>document.getElementById(id),main=document.querySelector('main');let session=JSON.parse(localStorage.chatSession||'null'),busy=false;
-const db=new Promise((resolve,reject)=>{const r=indexedDB.open('touch-mail',1);r.onupgradeneeded=()=>r.result.createObjectStore('rooms');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});
-async function store(room,value){const d=await db;return new Promise((resolve,reject)=>{const t=d.transaction('rooms',value?'readwrite':'readonly'),s=t.objectStore('rooms'),r=value?s.put(value,room):s.get(room);t.oncomplete=()=>resolve(r.result);t.onerror=()=>reject(t.error)})}
-let history=[],queue=[],chain=Promise.resolve();function save(){const room=session.room,data=structuredClone({history,queue});chain=chain.catch(()=>{}).then(()=>store(room,data));return chain}
-async function api(path,opts={}){const r=await fetch(new URL(path,'https://pocketlink-touch-chat.picklecai.chatgpt.site'),{...opts,headers:{...opts.headers,Authorization:'Bearer '+(session?.token||'')}});if(!r.ok){const info=await r.json().catch(()=>({}));throw Error(info.error||'聊天服务无法访问（'+r.status+'）');}return r}
-async function enter(){el('pair').hidden=true;el('change').hidden=false;main.hidden=false;const data=await store(session.room);history=data?.history||[];queue=data?.queue||[];paint();tick()}
-function paint(){const log=el('log');log.replaceChildren();for(const m of [...history,...queue]){const a=document.createElement('article');if(m.role==='phone')a.className='mine';const tag=document.createElement('small');tag.textContent=(m.role==='phone'?'手机':'ESP')+(m.seq?'':' · 待发送');a.append(tag,document.createTextNode(m.body||''));if(m.blob){const img=new Image();const u=URL.createObjectURL(m.blob);img.onload=()=>URL.revokeObjectURL(u);img.src=u;a.append(img)}log.append(a)}log.scrollTop=log.scrollHeight}
-async function pair(path){try{const pin=el('pin').value;if(path==='join'&&!/^\d{4}$/.test(pin))throw Error('请输入四位数字');session=await(await api('/'+path,{method:'POST',body:JSON.stringify({role:'phone',pin})})).json();localStorage.chatSession=JSON.stringify(session);await enter()}catch(e){el('status').textContent=e.message}}
-async function tick(){if(!session||busy)return;busy=true;try{while(queue.length){const m=queue[0];await api('/messages?id='+m.id,{method:'POST',headers:{'Content-Type':m.blob?'image/jpeg':'text/plain'},body:m.blob||m.body});queue.shift();await save()}
-const rows=await(await api('/messages?after='+(history.at(-1)?.seq||0))).json();for(const m of rows){if(m.photo)m.blob=await(await api('/image?id='+m.id)).blob();history.push(m);await save()}if(rows.length)paint();el('status').textContent=session.expiry>Date.now()?'配对码 '+session.pin+' · 请在 ESP 输入':'已连接服务'}catch{el('status').textContent='等待网络，消息已暂存'}finally{busy=false}}
-async function enqueue(body,blob){queue.push({id:crypto.randomUUID().replaceAll('-',''),role:'phone',body,blob});await save();paint();tick()}
-el('create').onclick=()=>pair('create');el('join').onclick=()=>pair('join');el('change').onclick=()=>{if(confirm('切换信箱？本机保留历史。')){delete localStorage.chatSession;location.reload()}};
-el('send').onclick=async()=>{let s=el('msg').value.trim();if(!s)return;if(new TextEncoder().encode(s).length>280){el('status').textContent='消息最多 280 字节';return}await enqueue(s);el('msg').value=''};
-el('file').onchange=async e=>{try{const f=e.target.files[0];if(!f)return;const im=await createImageBitmap(f,{imageOrientation:'from-image'}),c=document.createElement('canvas');let scale=Math.min(1,960/Math.max(im.width,im.height)),b;do{c.width=Math.max(1,Math.round(im.width*scale));c.height=Math.max(1,Math.round(im.height*scale));c.getContext('2d').drawImage(im,0,0,c.width,c.height);b=await new Promise(r=>c.toBlob(r,'image/jpeg',.78));scale*=.8}while(b.size>204800);im.close();await enqueue('',b)}catch{el('status').textContent='图片无法读取'}e.target.value=''};
-if(session)enter();setInterval(tick,2500);
-</script></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#e7edf4">
+<title>口袋信箱 · Pocket Link</title>
+<link rel="icon" href="data:,">
+<style>:root {
+  --sky:#e7edf4; --paper:#fbfdff; --ink:#152b51; --muted:#4d6079;
+  --blue:#224cbb; --line:#becbdc; --coral:#df765d; --error:#973822;
+  color-scheme:light; font-family:"Instrument Sans","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  color:var(--ink); background:var(--sky); -webkit-text-size-adjust:100%;
+}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:linear-gradient(145deg,#f2f6fa 0, var(--sky) 52%,#dbe5f1 100%);padding:0 max(19px,env(safe-area-inset-left)) max(24px,env(safe-area-inset-bottom))}
+[hidden]{display:none!important}button,input,textarea{font:inherit}button{min-height:44px;cursor:pointer;border-radius:6px;font-size:14px;font-weight:650;transition:background-color .15s,transform .15s}button:active{transform:translateY(1px)}button:disabled{cursor:default}button:focus-visible,textarea:focus-visible,input:focus-visible,a:focus-visible{outline:3px solid #2f6edb;outline-offset:3px}
+.mast,main{max-width:900px;margin:0 auto}.mast{min-height:78px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line)}.brand{display:inline-flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none;font-size:22px;font-weight:740;letter-spacing:-1.2px}.brand-icon{width:27px;height:22px;border:2px solid currentColor;border-radius:5px;display:block;position:relative;overflow:hidden;transform:rotate(-7deg)}.brand-icon:before{content:"";position:absolute;left:4px;top:-8px;width:14px;height:14px;border-bottom:2px solid;border-right:2px solid;transform:rotate(45deg)}
+.status{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:var(--muted)}.status i{width:8px;height:8px;border:1px solid currentColor;border-radius:100%}.status[data-mode=ok] i{background:#36836c;border-color:#36836c}.status[data-mode=error] i{background:var(--coral);border-color:var(--error)}
+main{padding:clamp(30px,6vh,64px) 0 0}.intro{margin-bottom:28px}.intro h1{margin:0 0 8px;font-size:clamp(36px,5vw,59px);font-weight:750;line-height:1.13;letter-spacing:-.06em}.intro p,.pair-card p,.pair-info p{margin:0;color:var(--muted);line-height:1.65;font-size:15px}.onboard,.letterbox,.pair-info{background:var(--paper);border:1px solid var(--line);border-radius:10px;box-shadow:0 4px 0 #cbd7e555}.onboard{display:grid;grid-template-columns:.94fr 1.06fr;overflow:hidden}
+.mail-art{overflow:hidden;background-color:#3259b3;background-image:radial-gradient(#91a9df66 .8px,transparent .8px);background-size:6px 6px;min-height:330px;position:relative;display:grid;place-content:center;color:#e5eefc}.post-lines{position:absolute;width:165%;height:51px;border-top:3px solid #a8c4ee;border-bottom:3px solid #a8c4ee;transform:rotate(-26deg);left:-25%;top:42%;opacity:.53}.post-lines:before,.post-lines:after{content:"";position:absolute;top:13px;left:0;right:0;border-top:3px solid #a8c4ee}.post-lines:after{top:30px}
+.device{z-index:1;transform:rotate(-10deg);width:159px;height:161px;background:#e2e8f3;border:3px solid #172c55;border-radius:17px;box-shadow:4px 5px 0 #15294f,11px 13px 0 #15294f55;display:flex;flex-direction:column;padding:12px 12px 8px}.speaker{height:4px;background:#8aa0bf;border-radius:4px;width:25px;align-self:center;margin-bottom:7px}.screen{flex:1;background:#182e55;border:2px solid #879bb9;border-radius:5px;display:grid;place-items:center;position:relative}.envelope,.empty-envelope{width:61px;height:39px;background:#c6dcff;border:3px solid #e8f2ff;border-radius:4px;position:relative;display:block;overflow:hidden}.envelope:before,.empty-envelope:before{content:"";position:absolute;width:42px;height:42px;left:6px;top:-25px;transform:rotate(45deg);border-right:3px solid #617fae;border-bottom:3px solid #617fae}.chin{height:18px;margin-top:5px;display:flex;align-items:center;justify-content:space-between}.chin b{width:9px;height:9px;background:var(--coral);border:1px solid #823e3b;border-radius:50%}.chin em{font:700 10px ui-monospace,Menlo,monospace;letter-spacing:.3px;color:#384b67}.art-caption{position:absolute;left:21px;bottom:16px;font-size:17px;font-weight:650;letter-spacing:-.8px}
+h2{font-size:21px;line-height:1.3;letter-spacing:-.04em;margin:0}.pair-card{padding:clamp(25px,4vw,43px);align-self:center}.pair-card p{margin:10px 0 22px}.primary,.secondary{border:1px solid transparent;padding:0 18px}.primary{background:var(--blue);color:white}.primary:hover{background:#183e9f}.primary:disabled{background:#d4deed;color:#54647b}.wide{width:100%}.secondary{background:#f7faff;border-color:#adbed5;color:var(--ink)}.secondary:hover{background:#eaf1fb}.divider{display:flex;gap:10px;align-items:center;margin:20px 0 14px;font-size:12px;color:var(--muted)}.divider:before,.divider:after{content:"";flex:1;height:1px;background:var(--line)}label{display:block;font-size:13px;font-weight:650;margin-bottom:7px}.join-line,.code-line{display:flex;gap:8px}input,textarea{width:100%;border:1px solid #aabbd3;border-radius:5px;font-size:16px;color:var(--ink);background:white}input{height:44px;padding:0 10px;min-width:0}input::placeholder,textarea::placeholder{color:#65748b}.join-line button{flex:none}.error,.notice{font-size:13px!important;font-weight:550;color:var(--error)!important;line-height:1.55;margin:10px 0 0!important}.inbox-heading{display:flex;align-items:center;justify-content:space-between;gap:10px}.inbox-heading p{font-size:13px}.pair-info{padding:20px 24px;margin-bottom:17px}.pair-info h2,.paper-head h2{font-size:18px}.pair-info p{font-size:13px;margin:6px 0 12px}.code-line{align-items:stretch}.code-line code{border:1px dashed #9eb1d1;background:#eef4ff;border-radius:5px;min-width:0;flex:1;display:flex;align-items:center;padding:8px 13px;overflow-wrap:anywhere;word-break:break-all;font:600 clamp(14px,2.6vw,21px)/1.5 ui-monospace,Menlo,monospace;user-select:all}.pair-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--muted);font-size:12px}.text-button{background:none;border:0;color:var(--blue);padding:0 3px}.letterbox{overflow:hidden}.paper-head{display:flex;align-items:center;justify-content:space-between;padding:15px 22px;background:#f2f6fc;border-bottom:1px solid var(--line)}.paper-head>span,.compose-bottom>span{font:13px ui-monospace,Menlo,monospace;color:var(--muted)}.notice{background:#fff1e6;padding:8px 20px;margin:0!important}.log-scroll{min-height:210px;max-height:min(46dvh,450px);overflow:auto;overscroll-behavior:contain;padding:20px 22px}.empty{min-height:170px;display:flex;align-items:center;justify-content:center;flex-direction:column;text-align:center;gap:6px}.empty-envelope{width:43px;height:28px;border:2px solid #59759d;background:#e9f1ff;margin-bottom:5px;transform:rotate(-6deg)}.empty-envelope:before{width:28px;height:28px;left:5px;top:-17px;border-width:2px}.empty strong{font-size:16px}.empty p{margin:0;font-size:13px;line-height:1.55;color:var(--muted)}
+#messages{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:16px}.letter{max-width:83%;align-self:flex-start}.letter.ours{align-self:flex-end}.letter p{margin:0;padding:10px 14px;border:1px solid var(--line);border-radius:10px 10px 10px 2px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;background:white}.letter.ours p{background:#eaf1ff;border-color:#b8cbed;border-radius:10px 10px 2px 10px}.meta{display:flex;align-items:center;flex-wrap:wrap;gap:7px;font-size:12px;line-height:1.5;color:var(--muted);margin:4px 2px}.ours .meta{justify-content:flex-end}.meta button{font-size:12px;min-height:32px}.compose{border-top:1px solid var(--line);padding:17px 22px 19px}.compose textarea{resize:vertical;min-height:72px;max-height:210px;padding:9px 11px;line-height:1.5}.compose-bottom{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px}.compose-bottom .too-long{color:var(--error)}footer{padding:13px 0 0;color:var(--muted);font-size:12px;text-align:right}
+@media(max-width:620px){body{padding-left:15px;padding-right:15px}.mast{min-height:60px}.brand{font-size:21px}main{padding-top:25px}.intro{margin-bottom:19px}.intro p{font-size:14px}.onboard{grid-template-columns:1fr}.mail-art{min-height:136px}.device{transform:rotate(-10deg) scale(.65);margin:-26px 0}.art-caption{font-size:14px;left:14px;bottom:10px}.post-lines{height:29px}.post-lines:before{top:6px}.post-lines:after{top:16px}.pair-card{padding:22px}.pair-card p{margin:7px 0 14px}.divider{margin:13px 0 10px}.pair-info,.paper-head,.compose{padding:14px}.log-scroll{padding:13px;max-height:44dvh;min-height:180px}.empty{min-height:149px}.inbox-heading h1{font-size:36px}.inbox-heading p{font-size:12px}.status{font-size:12px}.inbox-heading .secondary{padding:0 12px}.code-line code{padding:7px}.letter{max-width:90%}.notice{padding:7px 14px}footer{text-align:left}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important}}
+.mast-right{display:flex;align-items:center;gap:clamp(8px,2vw,24px)}.install{display:inline-flex;align-items:center;min-height:44px;color:var(--blue);font-size:13px;font-weight:650;text-underline-offset:3px}.history-more{margin:0 auto 12px;display:block}.meta button{min-height:44px;margin:-6px 0}.small-sep{color:var(--line)}
+
+.legacy{border-top:1px solid var(--line);margin-top:17px;padding-top:5px}.legacy summary{cursor:pointer;display:list-item;color:var(--blue);font-size:13px;font-weight:650;line-height:1.5;padding:12px 0}.legacy summary:focus-visible{outline:3px solid #2f6edb;outline-offset:2px}.pin-row{display:flex;align-items:center;min-height:48px}.pin-row output{font:700 clamp(38px,7vw,56px)/1.1 ui-monospace,Menlo,monospace;letter-spacing:.12em;color:var(--blue);font-variant-numeric:tabular-nums}.pair-info #pin-time,.pair-info #pin-note{margin:6px 0}.pair-foot{justify-content:flex-end}
+#device-form{margin-top:12px}body{background:transparent}html{background:#ecf0f5}.pair-card,.letterbox{position:relative}#waves{position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none}
+</style>
 
 
+
+
+</head>
+<body><canvas id="waves" aria-hidden="true"></canvas><script>
+function drawWaves(){const c=document.querySelector('#waves'),g=c.getContext('2d');c.width=innerWidth;c.height=innerHeight;for(let i=0;i<55;i++){g.beginPath();g.strokeStyle=i%6?'#224cbb23':'#df765d55';for(let x=0;x<=c.width+6;x+=6){const y=c.height*(i/55)+Math.sin(x/118+i*.12)*32+Math.cos(x/220+i*.1)*45;if(x===0)g.moveTo(x,y);else g.lineTo(x,y)}g.stroke()}}drawWaves();addEventListener('resize',drawWaves);
+</script>
+<header class="mast">
+  <a class="brand" href="https://pocket-link-pager.sapphylance.chatgpt.site/" aria-label="口袋信箱首页"><i class="brand-icon" aria-hidden="true"></i><span lang="en">Pocket Link</span></a>
+  <div class="mast-right"><a class="install" href="https://pocket-link-pager.sapphylance.chatgpt.site/device.html">独立版安装</a><span class="status" id="status" role="status"><i></i><span>尚未配对</span></span></div>
+</header>
+<main>
+  <section id="welcome" aria-labelledby="welcome-title">
+    <div class="intro"><h1 id="welcome-title">口袋信箱</h1><p>用手机给 ESP32 留言，也收下它的回信。</p></div>
+    <div class="onboard">
+      <div class="mail-art" aria-hidden="true">
+        <div class="post-lines"></div>
+        <div class="device"><span class="speaker"></span><div class="screen"><span class="envelope"></span></div><div class="chin"><b></b><em>ESP32</em></div></div>
+        <div class="art-caption">Pocket Link</div>
+      </div>
+      <div class="pair-card">
+        <h2>连接你的设备</h2><p>先让 ESP 连上 Wi-Fi。可以在任一端创建四位码，在另一端输入。</p>
+        <button id="create" class="primary wide" type="button">生成四位配对码</button>
+        <form id="device-form" class="join-line"><input id="device-pin" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" aria-label="ESP 上的四位码" placeholder="ESP 上的四位码" required><button type="submit" class="secondary">配对</button></form>
+        <details id="recovery" class="legacy"><summary>用恢复密钥打开已有信箱</summary>
+        <form id="join-form" novalidate>
+          <label for="key-input">32 位恢复密钥或旧版配对码</label>
+          <div class="join-line"><input id="key-input" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="输入或粘贴完整密钥" aria-describedby="welcome-error"><button class="secondary" type="submit">加入</button></div>
+        </form></details>
+        <p id="welcome-error" class="error" role="alert" hidden></p>
+      </div>
+    </div>
+  </section>
+  <section id="inbox" aria-labelledby="inbox-title" hidden>
+    <div class="intro inbox-heading"><div><h1 id="inbox-title">口袋信箱</h1><p id="short-key"></p></div><button class="secondary" id="pair-toggle" aria-expanded="false" aria-controls="pair-info" type="button">配对设置</button></div>
+    <section id="pair-info" class="pair-info" aria-labelledby="pair-title" hidden>
+      <div><h2 id="pair-title">连接ESP</h2><p>在ESP的信箱里选择四位配对，然后输入下方数字。</p></div>
+      <div class="pin-row"><output id="pair-pin" aria-label="四位配对码" hidden></output><button id="issue-pin" class="primary" type="button">生成四位配对码</button></div>
+      <p id="pin-time" hidden></p><p id="pin-note" role="status"></p>
+      <details id="legacy-key" class="legacy"><summary>恢复密钥与旧版设备</summary><p>旧版独立信箱及更换浏览器时可使用这串 32 位密钥。请只交给信任的人。</p>
+        <div class="code-line"><code id="key-value"></code><button class="secondary" id="copy" type="button">复制</button></div><span role="status" id="copy-info"></span>
+      </details>
+      <div class="pair-foot"><button id="switch" class="text-button" type="button">切换信箱</button></div>
+    </section>
+    <section class="letterbox" aria-labelledby="log-title">
+      <div class="paper-head"><h2 id="log-title">往来留言</h2><span id="count">0 条</span></div>
+      <p class="notice" id="connection" role="status" hidden></p>
+      <div class="log-scroll" id="scroll"><div class="empty" id="empty"><span class="empty-envelope" aria-hidden="true"></span><strong>还没有留言</strong><p>在下方写下第一条，ESP32 收到后会回执。</p></div><ol id="messages" aria-label="留言记录"></ol></div>
+      <form id="compose" class="compose">
+        <label for="text">写给 ESP32</label>
+        <textarea id="text" placeholder="想给设备留句话？" rows="2" aria-describedby="byte-count compose-error"></textarea>
+        <div class="compose-bottom"><span id="byte-count">0 / 280 字节</span><button id="send" class="primary" type="submit" disabled>发送留言</button></div>
+        <p id="compose-error" class="error" role="alert" hidden></p>
+      </form>
+    </section>
+    <footer>留言记录保存在当前浏览器。</footer>
+  </section>
+  <noscript>请开启 JavaScript 后使用口袋信箱。</noscript>
+</main>
+<script>
+/* Pocket Link wire format v1. No pairing secret, message text or credentials in URLs. */
+(() => {
+  'use strict';
+  const origin = 'https://ntfy.sh';
+  const enc = new TextEncoder();
+  const dec = new TextDecoder('utf-8', {fatal:true});
+  const hex = a => [...a].map(n => n.toString(16).padStart(2,'0')).join('');
+  const createKey = () => hex(crypto.getRandomValues(new Uint8Array(16)));
+  const digest = async value => new Uint8Array(await crypto.subtle.digest('SHA-256',enc.encode(value)));
+  const idPattern = /^[a-f0-9]{32}$/;
+  function validate(p, from) {
+    return p && p.v === 1 && p.from === from && idPattern.test(p.id) &&
+      Number.isSafeInteger(p.ts) && p.ts > 0 && p.ts <= 8640000000000000 &&
+      ((p.kind === 'msg' && typeof p.text === 'string' && p.text.trim() &&
+        enc.encode(p.text).length <= 280) || (p.kind === 'ack' && idPattern.test(p.ref)));
+  }
+  function b64(bytes) { return btoa(String.fromCharCode(...bytes)); }
+  async function request(url, options, read) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 18000);
+    try {
+      const res = await fetch(url, { ...options, signal:controller.signal,
+        mode:'cors', credentials:'omit', referrerPolicy:'no-referrer', cache:'no-store' });
+      if (!res.ok) {
+        const err = new Error(res.status === 429 ? '中转服务暂时限流，稍后重试。' : '中转服务暂不可用（'+res.status+'）。');
+        err.status = res.status;
+        throw err;
+      }
+      return await read(res);
+    } finally { clearTimeout(timer); }
+  }
+  async function open(pairing, role='web') {
+    if (!crypto.subtle) throw new Error('加密通讯需要 HTTPS，请打开正式网页。');
+    const raw = String(pairing).replace(/[\s-]/g,'').toLowerCase();
+    if (!idPattern.test(raw) || !['web','device'].includes(role)) throw new Error('配对码应为 32 位十六进制字符。');
+    const peer = role === 'web' ? 'device' : 'web';
+    const secret = await crypto.subtle.importKey('raw',await digest('pocketlink:key:v1:'+raw),'AES-GCM',false,['encrypt','decrypt']);
+    const topic = 'pl1-'+hex(await digest('pocketlink:topic:v1:'+raw)).slice(0,32)+'-';
+    const inbox = origin+'/'+topic+role;
+    async function unpack(line) {
+      if (line.event !== 'message' || line.topic !== topic+role || typeof line.message !== 'string' ||
+          !line.message.startsWith('PL1.') || line.message.length > 3500) return null;
+      try {
+        const data = Uint8Array.from(atob(line.message.slice(4)), c => c.charCodeAt(0));
+        if (data.length <= 28) return null;
+        const plain = await crypto.subtle.decrypt({name:'AES-GCM',iv:data.subarray(0,12)},secret,data.subarray(12));
+        const obj = JSON.parse(dec.decode(plain));
+        return validate(obj,peer) ? obj : null;
+      } catch { return null; }
+    }
+    async function send(p) {
+      if (!validate(p,role)) throw new Error('消息内容或格式无效。');
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const crypt = await crypto.subtle.encrypt({name:'AES-GCM',iv},secret,enc.encode(JSON.stringify(p)));
+      const data = new Uint8Array(12 + crypt.byteLength);
+      data.set(iv); data.set(new Uint8Array(crypt),12);
+      const response = await request(origin+'/'+topic+peer,{method:'POST',body:'PL1.'+b64(data)},r => r.json());
+      if (!response.id || response.event !== 'message' || response.topic !== topic+peer) throw new Error('中转服务未确认接收。');
+    }
+    async function poll(cursor='') {
+      // ntfy can replay other messages from the same second as a since=<id>
+      // cursor. Preserve a small time overlap and the broker IDs committed in it.
+      let newest = 0, known = new Map();
+      if (cursor && cursor.startsWith('{')) {
+        try {
+          const c = JSON.parse(cursor);
+          if (Number.isSafeInteger(c.t) && Array.isArray(c.ids)) {
+            newest = c.t;
+            known = new Map(c.ids);
+          }
+        } catch { /* Recover an old or incomplete checkpoint from the cache. */ }
+      }
+      const pos = newest > 5 ? String(newest-5) : 'all';
+      return request(inbox+'/json?poll=1&since='+encodeURIComponent(pos),{},async res => {
+        let changed = false; const messages = [];
+        let remaining = '';
+        async function consume(line) {
+          if (!line.trim()) return;
+          const obj = JSON.parse(line);
+          if (obj.event !== 'message' || obj.topic !== topic+role || !obj.id) return;
+          if (!Number.isSafeInteger(obj.time) || known.has(obj.id)) return;
+          newest = Math.max(newest,obj.time);
+
+          known.set(obj.id,obj.time);
+          changed = true;
+          const plain = await unpack(obj);
+          if (plain) messages.push(plain);
+
+        }
+        const rd = res.body.getReader(), utf = new TextDecoder();
+        for (;;) {
+          const {done,value} = await rd.read();
+          remaining += done ? utf.decode() : utf.decode(value,{stream:true});
+          const lines = remaining.split('\n');
+          remaining = lines.pop();
+          for (const line of lines) await consume(line);
+          if (done) break;
+        }
+        await consume(remaining);
+        const checkpoint = changed ? JSON.stringify({t:newest,ids:[...known].filter(([,t])=>t>=newest-5)}) : cursor;
+        return {messages,cursor:checkpoint};
+      });
+    }
+    return {send,poll};
+  }
+  window.PagerRelay = {open,createKey};
+})();
+
+</script>
+<script>
+window.POCKET_PAIR_PUBLIC = "046554194246765309f49c2a3de02319a494b259352e339036a33eebc952f5393390392f0b94e1ece0a7c77e145d214e04b6fbc3059d29077d98e3f4d870d8dc0f";
+
+</script>
+<script>
+(() => {
+  'use strict';
+  const enc = new TextEncoder();
+  const hex = bytes => Array.from(new Uint8Array(bytes), n => n.toString(16).padStart(2,'0')).join('');
+  const p256 = {name:'ECDH',namedCurve:'P-256'};
+
+  function newPin() {
+    const number = new Uint16Array(1);
+    do { crypto.getRandomValues(number); } while (number[0]>=60000);
+    return String(number[0]%10000).padStart(4,'0');
+  }
+  async function publish(key, requestedPin) {
+    const pub = String(window.POCKET_PAIR_PUBLIC||'').toLowerCase();
+    if(!/^04[0-9a-f]{128}$/.test(pub)) throw new Error('这台ESP尚未绑定四位配对，请稍后再试。');
+    if(!/^[0-9a-f]{32}$/.test(key)) throw new Error('信箱恢复密钥无效。');
+    if(!crypto.subtle) throw new Error('请通过 HTTPS 打开信箱。');
+    const raw=Uint8Array.from(pub.match(/../g),b=>parseInt(b,16));
+    const peer=await crypto.subtle.importKey('raw',raw,p256,false,[]);
+    const eph=await crypto.subtle.generateKey(p256,false,['deriveBits']);
+    const shared=new Uint8Array(await crypto.subtle.deriveBits({name:'ECDH',public:peer},eph.privateKey,256));
+    const prefix=enc.encode('pocketlink:pair:v1:'), material=new Uint8Array(prefix.length+shared.length);
+    material.set(prefix); material.set(shared,prefix.length);
+    const aes=await crypto.subtle.importKey('raw',await crypto.subtle.digest('SHA-256',material),'AES-GCM',false,['encrypt']);
+    shared.fill(0); material.fill(0);
+    const pin=requestedPin || newPin(), exp=Math.floor(Date.now()/1000)+180;
+    const iv=crypto.getRandomValues(new Uint8Array(12));
+    const box=await crypto.subtle.encrypt({name:'AES-GCM',iv,tagLength:128},aes,enc.encode(JSON.stringify({pin,key,exp})));
+    const topic='pl4-'+hex(await crypto.subtle.digest('SHA-256',raw)).slice(0,32);
+    const body=JSON.stringify({v:1,pub:hex(await crypto.subtle.exportKey('raw',eph.publicKey)),iv:hex(iv),box:hex(box)});
+    const controller=new AbortController();
+    const timeout=setTimeout(()=>controller.abort(),16000);
+    try{
+      const res=await fetch('https://ntfy.sh/'+topic,{method:'POST',headers:{'Content-Type':'text/plain'},body,
+        mode:'cors',credentials:'omit',referrerPolicy:'no-referrer',cache:'no-store',signal:controller.signal});
+      if(res.status===429) throw new Error('中转服务暂时限流，请稍后再试。');
+      if(!res.ok) throw new Error('配对邀请发送失败，请检查网络后重试。');
+      const receipt=await res.json();
+      if(!receipt.id||receipt.event!=='message'||receipt.topic!==topic) throw new Error('中转服务未确认配对邀请，请重试。');
+      if(Date.now()>=exp*1000) throw new Error('配对码已过期，请重新生成。');
+      return {pin,exp};
+    }catch(e){
+      if(e.name==='AbortError'||e instanceof TypeError) throw new Error('暂时无法发送配对邀请，请检查网络后重试。');
+      throw e;
+    }finally{clearTimeout(timeout);}
+  }
+  window.PagerInvite={publish};
+})();
+
+</script>
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const bytes = new TextEncoder();
+  const keyFormat = /^[0-9a-f]{32}$/;
+  const lastKey = 'pocket-link:active-v1';
+  const normalPoll = 15000;
+  const maxBackoff = 120000;
+  const timeFormat = new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
+  });
+  let current = null;
+  let version = 0;
+  let openingDb;
+  const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('pocket-link-v1') : null;
+
+  function database() {
+    if (openingDb) return openingDb;
+    openingDb = new Promise((resolve, reject) => {
+      const request = indexedDB.open('pocket-link-v1', 1);
+      request.onupgradeneeded = () => request.result.createObjectStore('boxes', {keyPath:'key'});
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    }).catch(error => { openingDb = null; throw error; });
+    return openingDb;
+  }
+  async function roomState(key, change) {
+    const db = await database();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('boxes', change ? 'readwrite' : 'readonly');
+      const store = tx.objectStore('boxes');
+      const get = store.get(key);
+      let state;
+      get.onsuccess = () => {
+        state = get.result || {key, cursor:'', messages:[], outbox:[]};
+        if (change) {
+          change(state);
+          store.put(state);
+        }
+      };
+      tx.oncomplete = () => resolve(state);
+      tx.onabort = tx.onerror = () => reject(tx.error || new Error('无法保存当前信箱。'));
+    });
+  }
+  function active(s) { return s === current; }
+  function remember(key) {
+    try {
+      if (key) localStorage.setItem(lastKey,key);
+      else localStorage.removeItem(lastKey);
+    } catch { /* A user can still reopen the inbox with its code. */ }
+  }
+  function setMessage(id,text) {
+    const el = $(id);
+    el.textContent = text;
+    el.hidden = !text;
+  }
+  function setStatus(label,mode='') {
+    $('status').dataset.mode = mode;
+    $('status').lastElementChild.textContent = label;
+  }
+  function connection(s) {
+    if (!active(s)) return;
+    let text = '';
+    if (!navigator.onLine) {
+      setStatus('当前离线','error');
+      text = '网络已断开。留言会保存在此，联网后自动发送。';
+    } else if (s.diskError) {
+      setStatus('存储不可用','error');
+      text = '浏览器未能保存留言。请检查存储空间或浏览器权限后刷新。';
+    } else if (s.receiveError || s.sendError) {
+      setStatus('等待重连','error');
+      text = (s.receiveError || s.sendError) + ' 留言已保留，会自动重试。';
+    } else if (s.synced) {
+      setStatus('收信中','ok');
+    } else {
+      setStatus('正在连接');
+    }
+    setMessage('connection',text);
+  }
+  function networkError(e) {
+    return e && e.status === 429 ? '中转服务暂时限流。' : '暂时无法连接中转服务。';
+  }
+  function clearTimers(s) {
+    if (!s) return;
+    clearTimeout(s.pollTimer);
+    clearTimeout(s.flushTimer);
+    clearTimeout(s.copyTimer);
+    clearInterval(s.pinTimer);
+  }
+  function settings(open) {
+    $('pair-info').hidden = !open;
+    $('pair-toggle').setAttribute('aria-expanded', String(open));
+    if (!open) { $('copy-info').textContent=''; $('legacy-key').open=false; }
+  }
+  function welcome() {
+    ++version;
+    clearTimers(current);
+    current = null;
+    remember('');
+    $('text').value = '';
+    $('key-input').value = '';
+    $('key-value').textContent = '';
+    $('inbox').hidden = true;
+    $('welcome').hidden = false;
+    setMessage('welcome-error','');
+    setStatus('尚未配对');
+    $('recovery').open=false; $('create').focus();
+  }
+  async function enter(key, showKey) {
+    const ticket = ++version;
+    setMessage('welcome-error','');
+    if (!keyFormat.test(key)) {
+      setMessage('welcome-error','配对码由 32 位数字 0–9 和字母 a–f 组成。');
+      $('key-input').focus();
+      return;
+    }
+    try {
+      const relay = await window.PagerRelay.open(key, 'web');
+      const state = await roomState(key);
+      if (version !== ticket) return;
+      clearTimers(current);
+      const s = current = {key,relay,visible:60,failures:0,flushBusy:false,pollBusy:false};
+      $('welcome').hidden = true;
+      $('inbox').hidden = false;
+      $('text').value = '';
+      $('key-input').value = '';
+      $('short-key').textContent = '手机与ESP的往来留言';
+      $('key-value').textContent='';
+      $('legacy-key').open=false;
+      setMessage('pin-note','');
+      paintPin(s);
+      $('copy-info').textContent = '';
+      setMessage('compose-error','');
+      settings(showKey);
+      remember(key);
+      updateComposer();
+      render(s,state,true);
+      connection(s);
+      planPoll(s,0);
+      planFlush(s,0);
+      if (showKey) issuePin(s);
+    } catch (e) {
+      if (version === ticket) {
+        setMessage('welcome-error',e.message && e.message.includes('HTTPS') ? e.message :
+          '无法打开信箱。请使用支持本地存储的浏览器，并通过 HTTPS 打开。');
+      }
+    }
+  }
+  function make(kind, extra) {
+    return {v:1,from:'web',kind,id:PagerRelay.createKey(),ts:Date.now(),...extra};
+  }
+  function addToOutbox(state,payload) {
+    state.outbox.push({payload,tries:0,next:0,lease:0});
+  }
+  function saved(s) {
+    channel?.postMessage({key:s.key});
+  }
+  async function refresh(s, scrollToEnd=false) {
+    try {
+      const state = await roomState(s.key);
+      if (active(s)) render(s,state,scrollToEnd);
+    } catch { s.diskError = true; connection(s); }
+  }
+  function updateComposer() {
+    const text = $('text').value;
+    const size = bytes.encode(text).length;
+    $('byte-count').textContent = size + ' / 280 字节';
+    $('byte-count').classList.toggle('too-long',size>280);
+    $('text').setAttribute('aria-invalid',String(size>280));
+    $('send').disabled = !text.trim() || size>280 || !!current?.composing;
+    setMessage('compose-error',size>280 ? '留言超过 280 字节，请缩短后发送。' : '');
+  }
+  function node(tag,cls,text) {
+    const el = document.createElement(tag);
+    if (cls) el.className = cls;
+    if (text !== undefined) el.textContent = text;
+    return el;
+  }
+  function render(s,state,scrollToEnd=false) {
+    if (!active(s)) return;
+    const list = $('messages'), panel = $('scroll');
+    const nearEnd = panel.scrollHeight-panel.scrollTop-panel.clientHeight<62;
+    const oldHeight = panel.scrollHeight;
+    const messages = state.messages;
+    // A successful poll may yield no new messages. Keep focus and scroll intact.
+    const stamp = JSON.stringify([s.visible,messages.length,messages.slice(-s.visible).map(m=>[m.id,m.status])]);
+    if (s.stamp === stamp) return;
+    s.stamp = stamp;
+    const fragment = document.createDocumentFragment();
+    if(messages.length>s.visible) {
+      const li=node('li'),more=node('button','text-button history-more','查看更早留言');
+      more.onclick=()=>{ s.visible+=60; s.expanded=true; refresh(s); };
+      li.append(more); fragment.append(li);
+    }
+    for (const msg of messages.slice(-s.visible)) {
+      const ours=msg.from==='web';
+      const li=node('li',ours?'letter ours':'letter');
+      li.append(node('p',null,msg.text));
+      const meta=node('div','meta');
+      const sender=node('span',null,ours?'本机':'ESP32');
+      const date=node('time',null,timeFormat.format(msg.ts));
+      date.dateTime = new Date(msg.ts).toISOString();
+      meta.append(sender,date);
+      if (ours) {
+        const labels={queued:'待发送',sent:'已发出 · 待回执',delivered:'ESP 已收到'};
+        meta.append(node('span',null,labels[msg.status] || '待发送'));
+        if(msg.status==='sent'){
+          const retry=node('button','text-button','重发');
+          retry.type='button';
+          retry.setAttribute('aria-label','重新发送这条留言');
+          retry.onclick=()=>resend(s,msg.id);
+          meta.append(retry);
+        }
+      }
+      li.append(meta); fragment.append(li);
+    }
+    list.replaceChildren(fragment);
+    $('empty').hidden = !!messages.length;
+    $('count').textContent = messages.length + ' 条';
+    if (s.expanded) { panel.scrollTop += panel.scrollHeight-oldHeight; s.expanded=false; }
+    else if(scrollToEnd || nearEnd) panel.scrollTop=panel.scrollHeight;
+  }
+  function planPoll(s,ms) {
+    if (!active(s)) return;
+    clearTimeout(s.pollTimer);
+    s.pollTimer=setTimeout(()=>poll(s),ms);
+  }
+  async function poll(s) {
+    if (!active(s) || s.pollBusy) return;
+    if (!navigator.onLine) {connection(s);planPoll(s,normalPoll);return;}
+    s.pollBusy=true;
+    let delay=normalPoll;
+    try {
+      const start = await roomState(s.key);
+      if (!active(s)) return;
+      const batch = await s.relay.poll(start.cursor);
+      if (!active(s)) return;
+      if(batch.cursor!==start.cursor || batch.messages.length) {
+        const next=await roomState(s.key, state=>{
+          // Another tab may already have committed the same batch and cursor.
+          if(state.cursor!==start.cursor) return;
+          const seen=new Map(state.messages.map(m=>[m.id,m]));
+          for(const item of batch.messages){
+            if(item.from!=='device') continue;
+            if(item.kind==='ack'){
+              const ours=seen.get(item.ref);
+              if(ours?.from==='web'){
+                ours.status='delivered';
+                state.outbox=state.outbox.filter(t=>t.payload.id!==item.ref);
+              }
+            }else if(item.kind==='msg'){
+              if(!seen.has(item.id)){
+                const msg={...item, status:'received'};
+                state.messages.push(msg);
+                seen.set(item.id,msg);
+              }
+              if(!state.outbox.some(t=>t.payload.kind==='ack' && t.payload.ref===item.id)){
+                addToOutbox(state,make('ack',{ref:item.id}));
+              }
+            }
+          }
+          // Messages, outgoing receipts, and cursor advance in one transaction.
+          state.cursor=batch.cursor;
+        });
+        if(!active(s)) return;
+        render(s,next);
+        saved(s);
+        planFlush(s,0);
+      }
+      s.synced=true; s.failures=0; s.receiveError='';
+    }catch(e){
+      s.receiveError=networkError(e);
+      delay=Math.min(maxBackoff,normalPoll*Math.pow(2,Math.min(4,s.failures++)));
+    }finally{
+      s.pollBusy=false;
+      connection(s);
+      if(active(s)) planPoll(s,delay);
+    }
+  }
+  function planFlush(s,ms){
+    if(!active(s) || s.flushBusy) return;
+    clearTimeout(s.flushTimer);
+    s.flushTimer=setTimeout(()=>flush(s),ms);
+  }
+  async function flush(s){
+    if(!active(s)||s.flushBusy) return;
+    if(!navigator.onLine){connection(s);planFlush(s,normalPoll);return;}
+    s.flushBusy=true;
+    let delay=normalPoll, claimed;
+    try {
+      // A short lease prevents two foreground tabs sending the same queued item concurrently.
+      await roomState(s.key,state=>{
+        const now=Date.now();
+        if((state.nextSend||0)>now) {delay=state.nextSend-now; return;}
+        const task=state.outbox.find(t=>Math.max(t.lease,t.next)<=now);
+        if(!task) return;
+        task.lease=now+25000;
+        state.nextSend=now+5100;
+        claimed=task.payload;
+      });
+      if(!claimed || !active(s)) return;
+      let err;
+      try { await s.relay.send(claimed); } catch(e) {err=e;}
+      const state=await roomState(s.key,st=>{
+        const index=st.outbox.findIndex(t=>t.payload.id===claimed.id);
+        if(index===-1) return;
+        if(err){
+          const task=st.outbox[index];
+          const wait=Math.min(maxBackoff,15000*2**Math.min(4,task.tries++));
+          task.next=Date.now()+wait; task.lease=0;
+          st.nextSend=Math.max(st.nextSend,task.next); delay=wait;
+        }else{
+          st.outbox.splice(index,1);
+          const msg=st.messages.find(m=>m.id===claimed.id);
+          if(msg && msg.status!=='delivered') msg.status='sent';
+          delay=5100;
+        }
+      });
+      if(!active(s)) return;
+      s.sendError=err ? networkError(err) : '';
+      render(s,state); saved(s);
+    }catch{
+      s.diskError=true;
+    }finally{
+      s.flushBusy=false; connection(s); planFlush(s,delay);
+    }
+  }
+  async function send(){
+    const s=current;
+    const raw=$('text').value;
+    if(!s||s.composing||!raw.trim()||bytes.encode(raw).length>280) return;
+    s.composing=true; updateComposer();
+    try{
+      const p=make('msg',{text:raw});
+      const state=await roomState(s.key,st=>{
+        st.messages.push({...p,status:'queued'});
+        addToOutbox(st,p);
+      });
+      if(!active(s)) return;
+      if($('text').value===raw) $('text').value='';
+      render(s,state,true); saved(s); planFlush(s,0);
+      $('text').focus();
+    }catch{ s.diskError=true; connection(s); }
+    finally {s.composing=false;if(active(s)) updateComposer();}
+  }
+  async function resend(s,id){
+    if(!active(s)) return;
+    try{
+      const state=await roomState(s.key,st=>{
+        const m=st.messages.find(msg=>msg.id===id);
+        if(m?.status!=='sent') return;
+        const {status,...p}=m;
+        m.status='queued';
+        if(!st.outbox.some(t=>t.payload.id===id)) addToOutbox(st,p);
+      });
+      if(active(s)){render(s,state);saved(s);planFlush(s,0);}
+    }catch{ s.diskError=true; connection(s); }
+  }
+  function paintPin(s) {
+    if (!active(s)) return;
+    const secs=s.invite?Math.ceil((s.invite.exp*1000-Date.now())/1000):0;
+    const valid=secs>0;
+    $('pair-pin').hidden=!valid;
+    $('pair-pin').textContent=valid?s.invite.pin:'';
+    $('issue-pin').hidden=valid;
+    $('issue-pin').disabled=!!s.issuing;
+    $('issue-pin').textContent=s.issuing?'正在生成…':'生成四位配对码';
+    setMessage('pin-time',valid?'剩余 '+Math.floor(secs/60)+' 分 '+String(secs%60).padStart(2,'0')+' 秒':'');
+    if(s.invite&&!valid){
+      s.invite=null;
+      clearInterval(s.pinTimer);
+      setMessage('pin-note','配对码已过期，请重新生成。');
+    }
+  }
+  async function issuePin(s) {
+    if(!active(s)||s.issuing)return;
+    if(s.invite&&s.invite.exp*1000>Date.now()){paintPin(s);return;}
+    s.issuing=true;setMessage('pin-note','');paintPin(s);
+    try {
+      const invite=await PagerInvite.publish(s.key);
+      if(!active(s))return;
+      s.invite=invite;
+      clearInterval(s.pinTimer);
+      s.pinTimer=setInterval(()=>paintPin(s),1000);
+    }catch(e){if(active(s))setMessage('pin-note',e.message||'生成失败，请重试。');}
+    finally{s.issuing=false;if(active(s))paintPin(s);}
+  }
+  $('issue-pin').onclick=()=>{if(current)issuePin(current);};
+  $('legacy-key').ontoggle=()=>{
+    $('key-value').textContent=current&&$('legacy-key').open?current.key.match(/.{4}/g).join(' '):'';
+  };
+  document.addEventListener('visibilitychange',()=>{if(current&&!document.hidden)paintPin(current);});
+  $('create').onclick=()=>{
+    if(!window.PagerRelay){setMessage('welcome-error','未能载入通信组件，请刷新网页。');return;}
+    enter(PagerRelay.createKey(),true);
+  };
+  $('device-form').onsubmit=async e=>{
+    e.preventDefault();
+    const pin=$('device-pin').value;
+    if(!/^\d{4}$/.test(pin))return;
+    const submit=e.currentTarget.querySelector('button');
+    if(submit.disabled)return;
+    submit.disabled=true;
+    try{
+      const key=PagerRelay.createKey();
+      await PagerInvite.publish(key,pin);
+      await enter(key,false);
+      setMessage('compose-error','邀请已发送，请查看 ESP 上的配对结果。');
+    }catch(err){setMessage('welcome-error',err.message||'无法发送邀请');}
+    finally{submit.disabled=false;}
+  };
+  $('join-form').onsubmit=e=>{
+    e.preventDefault();enter($('key-input').value.replace(/[\s-]/g,'').toLowerCase(),false);
+  };
+  $('pair-toggle').onclick=()=>settings($('pair-info').hidden);
+  $('switch').onclick=welcome;
+  $('copy').onclick=async ()=>{
+    const s=current;if(!s) return;
+    try{
+      await navigator.clipboard.writeText(s.key);
+      if(active(s)) $('copy-info').textContent='已复制配对码';
+    }catch{
+      if(!active(s)) return;
+      const range=document.createRange();range.selectNodeContents($('key-value'));
+      const selection=getSelection();selection.removeAllRanges();selection.addRange(range);
+      $('copy-info').textContent='已选中配对码，请手动复制。';
+    }
+  };
+  $('text').oninput=updateComposer;
+  $('text').onkeydown=e=>{if(!e.isComposing && (e.metaKey || e.ctrlKey) && e.key==='Enter'){e.preventDefault();send();}};
+  $('compose').onsubmit=e=>{e.preventDefault();send();};
+  window.addEventListener('offline',()=>{if(current) connection(current);});
+  window.addEventListener('online',()=>{if(current){connection(current);planPoll(current,0);planFlush(current,0);}});
+  channel?.addEventListener('message',e=>{if(current?.key===e.data?.key) refresh(current);});
+  let remembered;
+  try{remembered=localStorage.getItem(lastKey);}catch{}
+  if(remembered && keyFormat.test(remembered)) enter(remembered,false);
+})();
+
+</script>
+</body>
+</html>
